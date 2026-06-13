@@ -717,6 +717,7 @@ body{padding:0;align-items:flex-start}
         <div style="font-size:11px;font-weight:700;color:var(--d);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Courses</div>
         <div id="courseTabBar" style="display:flex;gap:4px;flex-wrap:wrap;background:#f5f5f5;border:1px solid var(--bdr);border-radius:12px;padding:4px;margin-bottom:8px"></div>
         <button onclick="showNewCourseForm()" class="btn bg2 bsm">&#10133; New Course</button>
+        <button onclick="diagCourses()" class="btn bw bsm" style="margin-left:6px">&#128300; Test Save</button>
       </div>
       <!-- New course form -->
       <div id="newCourseForm" style="display:none;background:#fff;border:1px solid #eee;border-radius:12px;padding:14px;margin-bottom:12px">
@@ -1110,15 +1111,49 @@ async function togStaffSusp(id,susp){
 
 async function resetStaffPw(id){
   var s=allStaff.find(function(x){return x.id===id;});
+  // Show inline confirm
+  var cfmId='staffRstCfm-'+id;
+  var existing=document.getElementById(cfmId);
+  if(existing){existing.remove();return;}
+  var btn=document.querySelector('[onclick*="resetStaffPw"][onclick*="'+id+'"]');
+  if(!btn)return;
+  var cfm=document.createElement('div');
+  cfm.id=cfmId;
+  cfm.style.cssText='background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:9px 12px;margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+  cfm.innerHTML='<span style="font-size:12px;font-weight:600;color:#92400e;flex:1">Reset password to 1234'+(s?' for '+esc(s.Name):''+'')+'?</span>'
+    +'<button class="btn bgh bsm" onclick="document.getElementById(\''+cfmId+'\').remove()">Cancel</button>'
+    +'<button class="btn bw bsm" onclick="doResetStaffPw(\''+id+'\')" >Yes, Reset</button>';
+  btn.parentNode.insertBefore(cfm,btn.nextSibling);
+}
+async function doResetStaffPw(id){
+  var cfmId='staffRstCfm-'+id;
+  var el=document.getElementById(cfmId);if(el)el.remove();
+  var s=allStaff.find(function(x){return x.id===id;});
   try{
     await sbPatch('users','?id=eq.'+id,{Password:'1234'});
     al('staffAl','&#128273; Password reset to 1234'+(s?' for '+esc(s.Name):'')+'. They will be prompted to change on next login.','ok');
   }catch(e){al('staffAl','Failed: '+e.message,'err');}
 }
 
-async function deleteStaff(id){
+function deleteStaff(id){
   var s=allStaff.find(function(x){return x.id===id;});if(!s)return;
-  if(!confirm('Delete account for '+s.Name+'? This cannot be undone.'))return;
+  var cfmId='staffDelCfm-'+id;
+  var existing=document.getElementById(cfmId);
+  if(existing){existing.remove();return;}
+  var btn=document.querySelector('[onclick*="deleteStaff"][onclick*="'+id+'"]');
+  if(!btn)return;
+  var cfm=document.createElement('div');
+  cfm.id=cfmId;
+  cfm.style.cssText='background:#fdecea;border:1px solid #fca5a5;border-radius:8px;padding:9px 12px;margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+  cfm.innerHTML='<span style="font-size:12px;font-weight:600;color:#991b1b;flex:1">&#9888; Delete account for '+esc(s.Name)+'? Cannot be undone.</span>'
+    +'<button class="btn bgh bsm" onclick="document.getElementById(\''+cfmId+'\').remove()">Cancel</button>'
+    +'<button class="btn bd bsm" onclick="doDeleteStaff(\''+id+'\')" >Yes, Delete</button>';
+  btn.parentNode.insertBefore(cfm,btn.nextSibling);
+}
+async function doDeleteStaff(id){
+  var cfmId='staffDelCfm-'+id;
+  var el=document.getElementById(cfmId);if(el)el.remove();
+  var s=allStaff.find(function(x){return x.id===id;});
   try{
     await sbDel('users','?id=eq.'+id);
     al('staffAl','&#128465; Account deleted.','ok');
@@ -3254,14 +3289,23 @@ var _activeCourse='';
 var _coursesData={};  // stores {name, examLink} per course
 
 async function rendCourses(){
-  // Load courses from lessons table + EXAM_LINKS
-  await loadCoursesData();
+  // Show loading state
+  var bar=$('courseTabBar');
+  if(bar) bar.innerHTML='<div style="font-size:12px;color:var(--m);padding:4px">&#9203; Loading courses...</div>';
+  // Load courses
+  try{ await loadCoursesData(); }catch(e){ al('coursesAl','Failed to load courses: '+e.message,'err'); }
+  // Always show built-in courses even if Supabase failed
+  var builtIn=['Nursing Assistant','Psychosocial Counselling','Medical Records Management','HIV Management'];
+  builtIn.forEach(function(c){
+    if(!_coursesData[c]) _coursesData[c]={name:c,examLink:EXAM_LINKS[c]||''};
+  });
   buildCourseTabBar();
-  if(_activeCourse) loadCourseContent(_activeCourse);
-  else {
-    var names=Object.keys(_coursesData);
-    if(names.length){_activeCourse=names[0];loadCourseContent(names[0]);}
+  if(!Object.keys(_coursesData).length){
+    if(bar) bar.innerHTML='<div style="font-size:12px;color:var(--m);padding:4px">No courses found.</div>';
+    return;
   }
+  if(!_activeCourse || !_coursesData[_activeCourse]) _activeCourse=Object.keys(_coursesData)[0];
+  loadCourseContent(_activeCourse);
 }
 
 async function loadCoursesData(){
@@ -3316,9 +3360,11 @@ async function saveCoursesData(){
   try{
     var existing=await sbGet('users','?Role=eq.Setting&Email=eq.courses_data@nki&limit=1');
     if(existing&&existing.length){
-      await sbPatch('users','?id=eq.'+existing[0].id,{Name:JSON.stringify(toSave)});
+      var patchResult=await fetch(SU+'/rest/v1/users?id=eq.'+existing[0].id,{method:'PATCH',headers:H,body:JSON.stringify({Name:JSON.stringify(toSave)})});
+      if(!patchResult.ok){var errText=await patchResult.text();throw new Error('Patch failed ('+patchResult.status+'): '+errText);}
     } else {
-      await sbPost('users',{Name:JSON.stringify(toSave),Email:'courses_data@nki',Role:'Setting',Password:'system',Suspended:'false','Payment Status':'false',Course:'',TotalFees:'0',AmountPaid:'0'});
+      var postResult=await fetch(SU+'/rest/v1/users',{method:'POST',headers:H,body:JSON.stringify({Name:JSON.stringify(toSave),Email:'courses_data@nki',Role:'Setting',Password:'system',Suspended:'false','Payment Status':'false',Course:'',TotalFees:'0',AmountPaid:'0'})});
+      if(!postResult.ok){var errText2=await postResult.text();throw new Error('Post failed ('+postResult.status+'): '+errText2);}
     }
   }catch(e){throw e;}
 }
@@ -3347,23 +3393,45 @@ function showNewCourseForm(){
 }
 function cancelNewCourse(){$('newCourseForm').style.display='none';}
 
+async function diagCourses(){
+  al('coursesAl','&#9203; Testing Supabase connection...','ok');
+  try{
+    var existing=await sbGet('users','?Role=eq.Setting&Email=eq.courses_data@nki&limit=1');
+    if(existing&&existing.length){
+      al('coursesAl','&#10003; Settings row found (id:'+existing[0].id+'). Save should work. Courses in memory: '+Object.keys(_coursesData).join(', '),'ok');
+    } else {
+      al('coursesAl','&#9888; No settings row found yet — will be created on first save. Courses in memory: '+Object.keys(_coursesData).join(', '),'ok');
+    }
+  }catch(e){
+    al('coursesAl','&#10008; Supabase error: '+esc(e.message)+'. Check your API key and table permissions.','err');
+  }
+}
+
 async function addCourse(){
   var name=($('newCourseName').value||'').trim();
   var examLink=($('newCourseExam').value||'').trim();
   if(!name){al('coursesAl','Enter a course name.','err');return;}
   if(_coursesData[name]){al('coursesAl','Course already exists.','err');return;}
+  var btn=$('newCourseForm').querySelector('.btn.bp');
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
   _coursesData[name]={name:name,examLink:examLink};
   EXAM_LINKS[name]=examLink;
   try{
     await saveCoursesData();
-    // Also update student enrollment checkboxes
     updateEnrollmentCheckboxes();
     $('newCourseForm').style.display='none';
     _activeCourse=name;
     buildCourseTabBar();
     loadCourseContent(name);
     al('coursesAl','&#10003; Course "'+esc(name)+'" added!','ok');
-  }catch(e){al('coursesAl','Failed: '+e.message,'err');}
+  }catch(e){
+    // Roll back if save failed
+    delete _coursesData[name];
+    delete EXAM_LINKS[name];
+    al('coursesAl','&#10008; Failed to save course: '+esc(e.message),'err');
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Add Course';}
+  }
 }
 
 function updateEnrollmentCheckboxes(){
@@ -3427,12 +3495,7 @@ async function loadCourseContent(course){
   if($('booksList'))$('booksList').innerHTML='<div class="emp">&#9203; Loading&#8230;</div>';
   try{
     var recs=await sbGet('lessons','?Course=eq.'+encodeURIComponent(course)+'&order=Unit.asc&select=id,Unit,Type,DriveLink,Course');
-    // Weekend check
-  if(_isWeekend()){
-    var root=document.getElementById('lessRoot');
-    if(root){showWeekendScreen('lessRoot');return;}
-  }
-  rendLessonsList(course,recs);
+    rendLessonsList(course,recs);
   }catch(e){
     $('lessonsList').innerHTML='<div class="emp" style="color:var(--a)">Failed to load lessons.</div>';
   }
